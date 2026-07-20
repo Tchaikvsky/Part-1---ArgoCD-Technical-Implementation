@@ -1,0 +1,15 @@
+# Secrets & credentials
+*.secret
+*secret*.yaml
+.env
+.env.*
+
+# Kubeconfigs
+*.kubeconfig
+kubeconfig
+kubeconfig.yaml
+kubeconfig.yml
+
+# Local / OS noise
+.DS_Store
+*.log
