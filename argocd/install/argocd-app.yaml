@@ -1,0 +1,22 @@
+﻿apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/<you>/Part-1---ArgoCD-Technical-Implementation
+    path: argocd/install          # <-- points at the dir where kustomization.yaml lives
+    targetRevision: main          # <-- Use default branch, not "stable"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: false              
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
+
+#Template from https://argo-cd.readthedocs.io/en/stable/operator-manual/declarative-setup/#server-side-apply-requirement

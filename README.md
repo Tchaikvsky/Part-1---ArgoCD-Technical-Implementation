@@ -49,7 +49,7 @@ kubectl create namespace argocd
 kubectl apply -n argocd --server-side --force-conflicts -k argocd/install/
 ```
 
-4. Confirm pods in the Argo CD namespace reach 'ready' status
+4. Confirm pods in the Argo CD namespace reach 'Running' status
 
 ```
 kubectl get pods -n argocd
@@ -68,7 +68,7 @@ argocd-server-66b7d96445-dgghw                      1/1     Running   0         
 5. Access the Argo CD UI:
 
 ```
-#Get terminal password:
+#Get UI password:
 kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
 
 #use kubectl port-forward to quickly access the Argo CD UI
