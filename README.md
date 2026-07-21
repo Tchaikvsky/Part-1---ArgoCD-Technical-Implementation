@@ -427,6 +427,79 @@ kubectl -n monitoring port-forward svc/monitoring-grafana 3000:80
 
 Grafana is then accessible at `http://localhost:3000` with username `admin`. The Argo CD dashboard should appear under the dashboards list.
 
+5. Configure alerts for Argo CD
+
+With metrics flowing and a dashboard in place, the final piece is alerting. The `kube-prometheus-stack` deployment includes the Prometheus Operator, which watches for `PrometheusRule` resources and loads them into Prometheus automatically — the same pattern as the ServiceMonitors, but for alert rules instead of scrape targets. Because we set `ruleSelectorNilUsesHelmValues: false` in the monitoring application's values earlier, Prometheus will discover any `PrometheusRule` in the cluster regardless of its labels.
+
+We'll define a set of alerts covering the three conditions most worth knowing about: an application stuck out of sync, an application that has become unhealthy, and an Argo CD component going down. Create the following as `alerts.yaml` in the `argocd/install` directory, alongside the ServiceMonitors:
+
+```
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: argocd-alerts
+  namespace: argocd
+spec:
+  groups:
+    - name: argocd.rules
+      rules:
+        - alert: ArgoCDAppOutOfSync
+          expr: argocd_app_info{sync_status="OutOfSync"} == 1
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Argo CD application {{ $labels.name }} is OutOfSync"
+            description: "Application {{ $labels.name }} has been OutOfSync for more than 30 minutes."
+
+        - alert: ArgoCDAppUnhealthy
+          expr: argocd_app_info{health_status=~"Degraded|Missing"} == 1
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Argo CD application {{ $labels.name }} is {{ $labels.health_status }}"
+            description: "Application {{ $labels.name }} has been {{ $labels.health_status }} for more than 15 minutes."
+
+        - alert: ArgoCDComponentDown
+          expr: up{namespace="argocd"} == 0
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Argo CD component {{ $labels.job }} is down"
+            description: "The Argo CD component {{ $labels.job }} has been unreachable for more than 10 minutes."
+```
+
+A few notes on the rules:
+
+- The `for:` durations prevent false alarms. An application is briefly `OutOfSync` during every normal sync, so we only alert once it has stayed that way past the window.
+- `ArgoCDComponentDown` uses the `up` metric that Prometheus generates for every scrape target, so a single rule covers all Argo CD components. We exclude `argocd-dex-server`.
+
+As with the ServiceMonitors, we reference the new file in `argocd/install/kustomization.yaml` so it becomes part of the self-managed Argo CD application:
+
+```
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: argocd
+resources:
+  - github.com/argoproj/argo-cd//manifests/cluster-install?ref=v3.4.5
+  - servicemonitors.yaml
+  - alerts.yaml
+```
+
+Commit both files and let the `argocd` application sync. We can confirm the rule was applied to the cluster and picked up by Prometheus:
+
+```
+kubectl -n argocd get prometheusrule
+
+---
+NAME            AGE
+argocd-alerts   30s
+```
+
+The alerts then appear in the Prometheus UI under the **Alerts** tab (`http://localhost:9090` after port-forwarding), sitting inactive until one of their conditions is met. To verify an alert fires, we can make an application drift out of sync — for example, by committing a change that isn't synced — and watch the `ArgoCDAppOutOfSync` alert move from Inactive to Pending to Firing once the `for:` window elapses.
+```
 
 
 
