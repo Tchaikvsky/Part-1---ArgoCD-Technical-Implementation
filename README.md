@@ -502,15 +502,98 @@ The alerts then appear in the Prometheus UI under the **Alerts** tab (`http://lo
 
 ### SSO Setup with Okta & OIDC
 
-We will be using Okta as our IdP for this project using a free Okta Developer account and following the following documentation
+We will be using Okta as our IdP for this project using a free Okta Developer account and following the following documentation:
 
-- [Argo CD & Okta OIDC (without Dec)](https://argo-cd.readthedocs.io/en/stable/operator-manual/user-management/okta/#oidc-without-dex)
-
+- [Argo CD & Okta OIDC (without Dex)](https://argo-cd.readthedocs.io/en/stable/operator-manual/user-management/okta/#oidc-without-dex)
 - [Sensitive Data and SSO Client Secrets](https://argo-cd.readthedocs.io/en/stable/operator-manual/user-management/#sensitive-data-and-sso-client-secrets)
 
-Most of the first link revoles around configuring things on the Okta side as well as the Argo CD UI. After that, we'll create a Kubernetes secret to hold the SSO `clientSecret` which we will then pass into the Okta configmap we create
+Most of the first link revolves around configuring things on the Okta side as well as the Argo CD UI. After that, we'll create a Kubernetes secret to hold the SSO `clientSecret` which we will then pass into the Okta configmap we create.
 
-Once everything is configured on the Okta end and you can successfully login with Okta on the Argo CD UI, we need to make sure that this persists. As it currentlys stands from the documentation, we used `kubectl edit` to make changes to the argocd configmap
+#### Storing the client secret out-of-band
+
+The OIDC client secret is sensitive and must **not** be committed to Git. Rather than place it in a manifest, we inject it directly into the existing `argocd-secret` and reference it from config. Using `stringData` lets us pass the raw secret — Kubernetes base64-encodes it for us — and `--type merge` adds our key without disturbing the other keys already in `argocd-secret` (the server signing key, admin password hash, and TLS material):
+
+```
+kubectl -n argocd patch secret argocd-secret \
+  --type merge \
+  -p '{"stringData": {"oidc.okta.clientSecret": "<your-okta-client-secret>"}}'
+```
+
+The config then references this key with `$oidc.okta.clientSecret` rather than embedding the value, keeping the secret out of the repo entirely.
+
+#### Persisting the configuration in Git
+
+Once everything is configured on the Okta end and you can successfully log in with Okta on the Argo CD UI, we need to make sure this persists. As it currently stands from the documentation, we used `kubectl edit` to make changes to the `argocd-cm` and `argocd-rbac-cm` ConfigMaps — but this is imperative and temporary. Because our Argo CD Application manages itself with `selfHeal: true`, it will eventually notice the live ConfigMaps differ from what's in Git and **revert them to the upstream defaults**, silently breaking SSO. For the configuration to be the source of truth, it has to live in the repository.
+
+The wrinkle is that `argocd-cm` and `argocd-rbac-cm` already exist in the upstream `cluster-install` manifests our kustomization pulls in. We can't simply add new copies — that would create a conflict. Instead, we use **kustomize patches** that merge our keys into the existing ConfigMaps.
+
+Create two patch files in `argocd/install/`:
+
+```
+# argocd/install/argocd-cm-patch.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+data:
+  url: https://localhost:8080
+  oidc.config: |
+    name: Okta
+    issuer: <your-issuer-URI>
+    clientID: <your-client-id>
+    clientSecret: $oidc.okta.clientSecret
+    requestedScopes: ["openid", "profile", "email"]
+```
+
+```
+# argocd/install/argocd-rbac-cm-patch.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-rbac-cm
+data:
+  policy.csv: |
+    g, <your-okta-email>, role:admin
+  scopes: '[email]'
+```
+
+Then reference them in `argocd/install/kustomization.yaml` via a `patches:` block:
+
+```
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: argocd
+resources:
+  - github.com/argoproj/argo-cd//manifests/cluster-install?ref=v3.4.5
+  - servicemonitors.yaml
+  - prometheus-rules.yaml
+patches:
+  - path: argocd-cm-patch.yaml
+  - path: argocd-rbac-cm-patch.yaml
+```
+
+Kustomize matches a patch to a base resource by kind + name + namespace, so naming the patches after the existing ConfigMaps causes our keys to be **merged in** rather than replacing them,the upstream keys stay intact, and our SSO config is layered on top.
+
+Before committing, render the result locally to confirm the merge worked and that the secret appears only as a `$`-reference, never as its literal value:
+
+```
+kubectl kustomize argocd/install/ | grep -E "oidc.config|url: https|policy.csv"
+```
+
+Once this looks correct, commit and push. The self-managed `argocd` Application syncs the change; because the rendered state matches what was already applied imperatively, it's a no-op merge and your session is unaffected. From this point on, `selfHeal` **protects** the SSO configuration instead of threatening it.
+
+#### Pitfalls to watch for
+
+A few issues we ran into that are worth flagging:
+
+- **Redirect URI mismatch.** Okta pre-fills a default sign-in redirect URI of `/authorization-code/callback`, but when I configured Argo CD I used `/auth/callback`. These must match exactly or Okta returns a `400 invalid_request`. Set the Okta app's Sign-in redirect URI to `https://localhost:8080/auth/callback` or add the correct original URI via Okta Admin Console.
+- **User not assigned to the application.** If you skip group/user assignment when creating the Okta app, login fails with `access_denied` ("User is not assigned to the client application"). Assign your user (or the built-in `Everyone` group) under the app's **Assignments** tab.
+- **Namespace in the patch metadata.** The upstream `argocd-cm` has no `namespace:` field, and kustomize matches patches on namespace among other fields. Including `namespace: argocd` in the patch metadata causes a "no matches for patch" error. We omit it and let the top-level `namespace:` in the kustomization apply it at build time.
+- **Every `argocd.example.com` in the docs → `https://localhost:8080`.** Since we access Argo CD via `kubectl port-forward`, the redirect URI, sign-out URI, `url:` field, and the authorization server's Audience all need to use the localhost address, not the doc's placeholder domain.
+
+### ApplicationSet Environments (Dev,Test,Prod)
+
+
 
 ## Design Decisions & Trade-offs
 - Using kind to create the Kubernetes cluster

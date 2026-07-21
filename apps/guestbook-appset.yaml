@@ -1,0 +1,32 @@
+﻿apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: guestbook
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: https://github.com/Tchaikvsky/Part-1---ArgoCD-Technical-Implementation
+        revision: main
+        directories:
+          - path: environments/*
+  template:
+    metadata:
+      name: 'guestbook-{{.path.basename}}'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/Tchaikvsky/Part-1---ArgoCD-Technical-Implementation
+        targetRevision: main
+        path: '{{.path.path}}'
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: 'guestbook-{{.path.basename}}'
+      syncPolicy:
+        automated:
+          prune: false
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
