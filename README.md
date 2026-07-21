@@ -322,7 +322,112 @@ resources:
   - <servicemonitors-file-name-here>.yaml      
 ```
 
-Commit these changes to your Git repository and and synce your applications in the Argo CD UI.
+Commit these changes to your Git repository and and synce your applications in the Argo CD UI. Once everything is synced, you can port-forward the prometheus endpoint and check the status of your Services and perform manual Queries such as `argocd_app_info`
+
+```
+kubectl -n monitoring port-forward svc/prometheus-operated 9090
+```
+
+You can then access Prometheus via `http://localhost:9090`
+
+3. Deploy an Argo CD dashboard to Grafana via GitOps
+
+With metrics flowing into Prometheus, we now want to visualize them in Grafana. Rather than importing a dashboard by hand through the Grafana UI (which wouldn't be captured in Git), we'll deploy it declaratively. The `kube-prometheus-stack` chart runs a sidecar container alongside Grafana that watches for ConfigMaps labeled `grafana_dashboard: "1"` and automatically loads any dashboard JSON they contain. We can confirm the sidecar is present with:
+
+```
+kubectl -n monitoring get deployment monitoring-grafana -o jsonpath='{.spec.template.spec.containers[*].name}{"\n"}'
+
+---
+grafana-sc-dashboard grafana-sc-datasources grafana
+```
+
+The `grafana-sc-dashboard` container is the sidecar we'll be feeding.
+
+First, create a directory for our dashboards and pull down the official Argo CD dashboard JSON:
+
+```
+mkdir -p dashboards
+curl -sL https://raw.githubusercontent.com/argoproj/argo-cd/master/examples/dashboard.json -o argocd-dashboard.json
+```
+
+Confirm the download is real JSON and not an error page — the output should begin with `{`:
+
+```
+head -c 200 argocd-dashboard.json; echo
+```
+
+Rather than hand-embed several hundred lines of JSON into a ConfigMap manifest (and risk an indentation mistake), we let `kubectl` generate the manifest for us. The `--dry-run=client -o yaml` flags mean nothing is applied to the cluster — the ConfigMap YAML is simply written to a file for Argo CD to manage:
+
+```
+kubectl create configmap argocd-grafana-dashboard \
+  --from-file=argocd-dashboard.json \
+  --namespace monitoring \
+  --dry-run=client -o yaml > dashboards/argocd-dashboard-configmap.yaml
+```
+
+The generated file won't have the sidecar label yet, so we add it manually under `metadata`. The final `dashboards/argocd-dashboard-configmap.yaml` should look like this (JSON truncated for readability):
+
+```
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-grafana-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"      # <-- the label the Grafana sidecar watches for
+data:
+  argocd-dashboard.json: |
+    {
+      "annotations": { ... },
+      "panels": [ ... ],
+      ...
+    }
+```
+
+The `grafana_dashboard: "1"` label is the entire trigger — without it, the ConfigMap is inert; with it, the sidecar imports the dashboard into Grafana automatically.
+
+4. Manage the dashboard through the root application
+
+Because our `monitoring` application is a Helm chart (and has no path into our repo), we create a small dedicated application to manage the `dashboards/` directory. Create the following in the `apps/` directory so that root picks it up:
+
+```
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: dashboards
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: <your-repoURL>
+    path: dashboards           # <-- the directory holding our dashboard ConfigMap(s)
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring      # ConfigMap must land where Grafana's sidecar is watching
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+```
+
+Commit both `dashboards/argocd-dashboard-configmap.yaml` and the new `apps/dashboards-app.yaml` to your Git repository. Root will detect the new application and sync it, applying the ConfigMap into the `monitoring` namespace, where the Grafana sidecar loads it.
+
+To view the result, get the Grafana admin password and port-forward the Grafana service:
+
+```
+#Get Grafana admin password:
+kubectl -n monitoring get secret monitoring-grafana -o jsonpath="{.data.admin-password}" | base64 -d; echo
+
+#Port-forward the Grafana UI:
+kubectl -n monitoring port-forward svc/monitoring-grafana 3000:80
+```
+
+Grafana is then accessible at `http://localhost:3000` with username `admin`. The Argo CD dashboard should appear under the dashboards list.
+
+
 
 
 ## Design Decisions & Trade-offs

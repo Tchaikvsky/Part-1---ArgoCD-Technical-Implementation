@@ -1,0 +1,20 @@
+﻿apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: dashboards
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Tchaikvsky/Part-1---ArgoCD-Technical-Implementation
+    path: dashboards           # <-- the directory holding our dashboard ConfigMap(s)
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring      # ConfigMap must land where Grafana's sidecar is watching
+  syncPolicy:
+    automated:
+      prune: true           
+      selfHeal: true
