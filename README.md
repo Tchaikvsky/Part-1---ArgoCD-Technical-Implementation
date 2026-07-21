@@ -118,7 +118,41 @@ labels:
 ```
 >Once tested, you can remove this label block and continue with the next steps.
 
-### Bootstrap the root app of apps application
+### Bootstrap the root app-of-apps application
+
+Now that we've created an application that allows Argo CD to 'self-manage' itself, we can deploy a root app-of-apps application that will utilize the `apps` directory we created earlier which will host all the application manifests we plan on creating.
+
+Creating a bootstraping directory in your Git repo and add the following `.yaml` file:
+
+```
+# bootstrap/root-app.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io      #Added to create cascading delete behavior for the root app, so that deleting the root app will also delete all of its child apps.
+spec:
+  project: default
+  source:
+    repoURL: <your-repoURL>
+    path: apps                 # <-- the folder full of Application manifests
+    targetRevision: main
+    directory:
+      recurse: true            # picks up nested apps too, future-proofing
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd          # where Application CRs live
+  syncPolicy:
+    automated:
+      prune: true          
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
+```
+
+Once this is created, use `kubectl apply -f /apps/<file-name>.yaml` to initialize the root app-of-apps application. With this deployed, the root application will now manage the `/apps` directory and deploy new applications when new manifests become available.
 
 ## Design Decisions & Trade-offs
 - Using kind to create the Kubernetes cluster
@@ -127,6 +161,8 @@ labels:
     - `stable` is a floating tag that moves as new releases land, which makes the desired state non-deterministic. Argo CD could reconcile itself toward a version we never chose or tested. Pinning a specific version  in Git as the source of truth makes the install reproducible and upgrades an auditable, reviewable commit. The trade-off is that we don't automatically get new releases, which mirrors real organizational practice.
 - Using kubectl port-forward, we're able to easily access the Argo CD UI
     - This is a quick way to gain access but is only an option as long as the port-forward tunnel is open. In production environments, exposing Argo CD via something like an Ingress with proper DNS and TLS configured would be best practice.
+- Using an app-of-app pattern and creating each manifest in the `/apps` directory in our repository.
+    - app-of-apps is the foundational pattern (explicit, one-file-per-app); ApplicationSet is the scale-up (templated, generator-driven) that the [docs](https://argo-cd.readthedocs.io/en/stable/operator-manual/cluster-bootstrapping/#cluster-bootstrapping) now recommend for bootstrapping.
 
 ## Assumptions
 

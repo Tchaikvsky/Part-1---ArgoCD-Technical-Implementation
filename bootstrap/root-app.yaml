@@ -4,6 +4,8 @@ kind: Application
 metadata:
   name: root
   namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io      #Added to create cascading delete behavior for the root app, so that deleting the root app will also delete all of its child apps.
 spec:
   project: default
   source:
@@ -17,7 +19,7 @@ spec:
     namespace: argocd          # where Application CRs live
   syncPolicy:
     automated:
-      prune: false             # same caution as before — flip to true after you trust it
+      prune: true          
       selfHeal: true
     syncOptions:
       - ServerSideApply=true
