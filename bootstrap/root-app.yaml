@@ -1,0 +1,23 @@
+﻿# bootstrap/root-app.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Tchaikvsky/Part-1---ArgoCD-Technical-Implementation
+    path: apps                 # <-- the folder full of Application manifests
+    targetRevision: main
+    directory:
+      recurse: true            # picks up nested apps too, future-proofing
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd          # where Application CRs live
+  syncPolicy:
+    automated:
+      prune: false             # same caution as before — flip to true after you trust it
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
