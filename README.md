@@ -162,7 +162,9 @@ Once this is created, we need to paradoxically manually deploy the root applicat
 
 ### Deploy Prometheus, metrics, dashboards, and alerts
 
-Let's first confirm the latest versions of prometheus that are available using Helm
+1. Deploy Prometheus, Grafana, and Alertmanager via Helm
+
+We're going to use Helm to deploy Prometheus into our clusters. It's simple and will deploy Alertmanager, Grafana, Prometheus, and the necessary operators. Let's first confirm the latest versions of prometheus that are available using Helm
 
 ```
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
@@ -215,7 +217,7 @@ spec:
         # Let Prometheus discover ServiceMonitors in ALL namespaces, not just its own
         prometheus:
           prometheusSpec:
-            serviceMonitorSelectorNilUsesHelmValues: false
+            serviceMonitorSelectorNilUsesHelmValues: false. # Used so Prometheus can scrape any ServiceMonitor
             ruleSelectorNilUsesHelmValues: false
   destination:
     server: https://kubernetes.default.svc
@@ -226,10 +228,102 @@ spec:
       selfHeal: true
     syncOptions:
       - ServerSideApply=true        # REQUIRED — CRD annotation size limit
-      - CreateNamespace=true        # makes the monitoring namespace for you
+      - CreateNamespace=true        # makes the monitoring namespace for you if not already created
 ```
 
-Create this file in the `apps/` directory of our Git repo and head over to the Argo CD UI to confirm that prometheus is running under root.
+Create this file in the `apps/` directory of our Git repo and head over to the Argo CD UI to confirm that Prometheus is running under root.
+
+2. Deploy ServiceMonitors for the argocd namespace resources
+
+Next, we will want to deploy ServiceMonitors for the resources in the ArgoCD namespace so metrics can be collected for them. We will create the manifest for these ServiceMonitors under the `argocd/install` directory:
+
+```
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: argocd-metrics
+  namespace: argocd
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-metrics
+  endpoints:
+    - port: metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: argocd-server-metrics
+  namespace: argocd
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-server-metrics
+  endpoints:
+    - port: metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: argocd-repo-server-metrics
+  namespace: argocd
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-repo-server
+  endpoints:
+    - port: metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: argocd-applicationset-controller-metrics
+  namespace: argocd
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-applicationset-controller
+  endpoints:
+    - port: metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: argocd-dex-server
+  namespace: argocd
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-dex-server
+  endpoints:
+    - port: metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: argocd-notifications-controller
+  namespace: argocd
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-notifications-controller-metrics
+  endpoints:
+    - port: metrics
+```
+
+We will then reference this new file in the kustomization.yaml manifest:
+
+```
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: argocd
+resources:
+  - github.com/argoproj/argo-cd//manifests/cluster-install?ref=v3.4.5
+  - <servicemonitors-file-name-here>.yaml      
+```
+
+Commit these changes to your Git repository and and synce your applications in the Argo CD UI.
+
 
 ## Design Decisions & Trade-offs
 - Using kind to create the Kubernetes cluster
