@@ -5,3 +5,6 @@ resources:
   - github.com/argoproj/argo-cd//manifests/cluster-install?ref=v3.4.5
   - servicemonitors.yaml
   - prometheus-rules.yaml
+patches:
+  - path: argocd-cm-patch.yaml
+  - path: argocd-rbac-cm-patch.yaml

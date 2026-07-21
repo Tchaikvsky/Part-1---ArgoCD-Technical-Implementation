@@ -1,0 +1,12 @@
+﻿apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+data:
+  url: https://localhost:8080
+  oidc.config: |
+    name: Okta
+    issuer: https://integrator-2972485.okta.com/oauth2/aus15gn1bivyCsYys698
+    clientID: 0oa15gmzxtnRxBONf698
+    clientSecret: $oidc.okta.clientSecret
+    requestedScopes: ["openid", "profile", "email"]

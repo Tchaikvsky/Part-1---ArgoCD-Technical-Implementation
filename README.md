@@ -474,7 +474,7 @@ spec:
 A few notes on the rules:
 
 - The `for:` durations prevent false alarms. An application is briefly `OutOfSync` during every normal sync, so we only alert once it has stayed that way past the window.
-- `ArgoCDComponentDown` uses the `up` metric that Prometheus generates for every scrape target, so a single rule covers all Argo CD components. We exclude `argocd-dex-server`.
+- `ArgoCDComponentDown` uses the `up` metric that Prometheus generates for every scrape target, so a single rule covers all Argo CD components. 
 
 As with the ServiceMonitors, we reference the new file in `argocd/install/kustomization.yaml` so it becomes part of the self-managed Argo CD application:
 
@@ -499,9 +499,18 @@ argocd-alerts   30s
 ```
 
 The alerts then appear in the Prometheus UI under the **Alerts** tab (`http://localhost:9090` after port-forwarding), sitting inactive until one of their conditions is met. To verify an alert fires, we can make an application drift out of sync — for example, by committing a change that isn't synced — and watch the `ArgoCDAppOutOfSync` alert move from Inactive to Pending to Firing once the `for:` window elapses.
-```
 
+### SSO Setup with Okta & OIDC
 
+We will be using Okta as our IdP for this project using a free Okta Developer account and following the following documentation
+
+- [Argo CD & Okta OIDC (without Dec)](https://argo-cd.readthedocs.io/en/stable/operator-manual/user-management/okta/#oidc-without-dex)
+
+- [Sensitive Data and SSO Client Secrets](https://argo-cd.readthedocs.io/en/stable/operator-manual/user-management/#sensitive-data-and-sso-client-secrets)
+
+Most of the first link revoles around configuring things on the Okta side as well as the Argo CD UI. After that, we'll create a Kubernetes secret to hold the SSO `clientSecret` which we will then pass into the Okta configmap we create
+
+Once everything is configured on the Okta end and you can successfully login with Okta on the Argo CD UI, we need to make sure that this persists. As it currentlys stands from the documentation, we used `kubectl edit` to make changes to the argocd configmap
 
 ## Design Decisions & Trade-offs
 - Using kind to create the Kubernetes cluster
@@ -512,7 +521,11 @@ The alerts then appear in the Prometheus UI under the **Alerts** tab (`http://lo
     - This is a quick way to gain access but is only an option as long as the port-forward tunnel is open. In production environments, exposing Argo CD via something like an Ingress with proper DNS and TLS configured would be best practice.
 - Using an app-of-app pattern and creating each manifest in the `/apps` directory in our repository.
     - app-of-apps is the foundational pattern (explicit, one-file-per-app); ApplicationSet is the scale-up (templated, generator-driven) that the [docs](https://argo-cd.readthedocs.io/en/stable/operator-manual/cluster-bootstrapping/#application-sets-and-cluster-labels-recommended) now recommend for bootstrapping.
+- We kept alerts for Dex despite it being down to prove that the alerts were actualy working.
+    - In a real environment, this would cause alert fatigue and would most likely be resolved by excluding dex from the Prometheus rules.
+- Patch metadata must match the base exactly, and the namespace: at the top of the kustomization applies the namespace at build time, so you don't put it on individual patches.
+    - When creating the patches in the kustomize.yaml file, we specified namespaces but this created an error when testing.
 
 ## Assumptions
 
-- One heavy assumption that I had was the ability to use something like Claude to verify, troubleshoot, and parse information as needed.
+- One assumption that I had was the ability to use something like Claude to verify, troubleshoot, and parse information as needed.s
