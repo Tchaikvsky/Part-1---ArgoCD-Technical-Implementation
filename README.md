@@ -109,6 +109,17 @@ spec:
 ```
 Save this to your git repository and then apply the manifest inside your cluster with something like `kubectl apply -f <file-name-here>`. We need to use `kubectl apply` at first because ArgoCD can't manage an Application it doesn't know exists yet. Once the Argo CD appears as an application in the UI and you verify a simple test-sync works, feel free to go into your repo and change `prune:` to `true` for self-management.
 
+>If you'd like to do a quick test to make sure that ArgoCD reacts to changes in your Git repository, you can add a simple label section to your kustomize.yaml file and see if it syncs and deploys:
+```
+labels:
+  - pairs:
+      test-label: loop-check
+    includeSelectors: false
+```
+>Once tested, you can remove this label block and continue with the next steps.
+
+### Bootstrap the root app of apps application
+
 ## Design Decisions & Trade-offs
 - Using kind to create the Kubernetes cluster
     - kind gives a reproducible local cluster ideal for evaluation and simple testing; a production deployment would likely target a managed cluster (EKS/GKE/AKS) or OpenShift for HA, real networking, and multi-node scale.
