@@ -92,21 +92,22 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Tchaikvsky/Part-1---ArgoCD-Technical-Implementation/
+    repoURL: <your-repoURL>
     path: argocd/install          # <-- points at the dir where kustomization.yaml lives
-    targetRevision: main          # <-- Use our repo branch verson of Argo, not "stable"
+    targetRevision: main          # <-- Use our repo branch version of Argo CD we deployed, not "stable"
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd
   syncPolicy:
     automated:
-      prune: true            
+      prune: false            
       selfHeal: true
     syncOptions:
       - ServerSideApply=true
 
 #Template from https://argo-cd.readthedocs.io/en/stable/operator-manual/declarative-setup/#server-side-apply-requirement
 ```
+Save this to your git repository and then apply the manifest inside your cluster with something like `kubectl apply -f <file-name-here>`. We need to use `kubectl apply` at first because ArgoCD can't manage an Application it doesn't know exists yet. Once the Argo CD appears as an application in the UI and you verify a simple test-sync works, feel free to go into your repo and change `prune:` to `true` for self-management.
 
 ## Design Decisions & Trade-offs
 - Using kind to create the Kubernetes cluster
