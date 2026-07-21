@@ -8,14 +8,17 @@ This repository is used to store all configuration files, manifests, and documen
 - [Docker](https://www.docker.com/get-started/) (v29.6.2)
 - [Kubectl](https://kubernetes.io/docs/tasks/tools/#kubectl) (v1.36.1)
 - [Kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installing-from-release-binaries) (v0.32.0)
+- [Helm](https://helm.sh/docs/intro/install/) (v4.2.3)
 
 ## How to Deploy
+
 
 ### Create a Kubernetes cluster
 
 First, we must create a Kubernetes cluster in which Argo CD and our application will be deployed. In this assessment, we will use [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#creating-a-cluster) to quickly deploy a cluster locally to our machine: `kind create cluster`.
 
 This should take a minute or so to run and provision a simple single-node Kubernetes cluster that we can use.
+
 
 ### Deploy Argo CD & Reach the UI
 
@@ -79,9 +82,10 @@ kubectl port-forward svc/argocd-server -n argocd 8080:443
 
 If you've done everything correctly. You should be logged in into the Argo CD UI and see the applications page.
 
+
 ### Manage Argo CD with Argo CD
 
-We want Argo CD to be "self-managed" so we need to make our Argo CD instance an Application:
+We want Argo CD to be "self-managed" so we need to make our Argo CD instance an Application. Using the template manifest below, create the application in a directory `apps/` in your Git repository.
 
 ```
 apiVersion: argoproj.io/v1alpha1
@@ -94,7 +98,7 @@ spec:
   source:
     repoURL: <your-repoURL>
     path: argocd/install          # <-- points at the dir where kustomization.yaml lives
-    targetRevision: main          # <-- Use our repo branch version of Argo CD we deployed, not "stable"
+    targetRevision: main          # <-- our repo's branch, not the upstream stable tag"
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd
@@ -109,7 +113,7 @@ spec:
 ```
 Save this to your git repository and then apply the manifest inside your cluster with something like `kubectl apply -f <file-name-here>`. We need to use `kubectl apply` at first because ArgoCD can't manage an Application it doesn't know exists yet. Once the Argo CD appears as an application in the UI and you verify a simple test-sync works, feel free to go into your repo and change `prune:` to `true` for self-management.
 
->If you'd like to do a quick test to make sure that ArgoCD reacts to changes in your Git repository, you can add a simple label section to your kustomize.yaml file and see if it syncs and deploys:
+>If you'd like to do a quick test to make sure that ArgoCD reacts to changes in your Git repository, you can add a simple label section to your kustomize.yaml file. Commit the change and push it to your git repository. Re-sync the application and see if the change is propagated:
 ```
 labels:
   - pairs:
@@ -120,9 +124,10 @@ labels:
 
 ### Bootstrap the root app-of-apps application
 
-Now that we've created an application that allows Argo CD to 'self-manage' itself, we can deploy a root app-of-apps application that will utilize the `apps` directory we created earlier which will host all the application manifests we plan on creating.
+Now that we've created an application that allows Argo CD to 'self-manage' itself, we can deploy a root app-of-apps application that will use the `apps` directory we created earlier which will host all the application manifests we plan on creating.
 
-Creating a bootstraping directory in your Git repo and add the following `.yaml` file:
+
+Create a bootstrapping directory in your Git repo and add the following `.yaml` file:
 
 ```
 # bootstrap/root-app.yaml
@@ -132,7 +137,7 @@ metadata:
   name: root
   namespace: argocd
   finalizers:
-    - resources-finalizer.argocd.argoproj.io      #Added to create cascading delete behavior for the root app, so that deleting the root app will also delete all of its child apps.
+    - resources-finalizer.argocd.argoproj.io      #Cascading delete: removing root also removes its child apps
 spec:
   project: default
   source:
@@ -146,13 +151,85 @@ spec:
     namespace: argocd          # where Application CRs live
   syncPolicy:
     automated:
-      prune: true          
+      prune: false             # Like before, flip to 'true' once tested        
       selfHeal: true
     syncOptions:
       - ServerSideApply=true
 ```
 
-Once this is created, use `kubectl apply -f /apps/<file-name>.yaml` to initialize the root app-of-apps application. With this deployed, the root application will now manage the `/apps` directory and deploy new applications when new manifests become available.
+Once this is created, we need to paradoxically manually deploy the root application using `kubectl apply -f bootstrap/<file-name>.yaml` to initialize the root app-of-apps application. With this deployed, the root application will now manage the `apps/` directory and deploy new applications when new manifests become available.
+
+
+### Deploy Prometheus, metrics, dashboards, and alerts
+
+Let's first confirm the latest versions of prometheus that are available using Helm
+
+```
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+helm search repo kube-prometheus-stack --versions | head
+```
+
+On the day of performing this test, these were the chart versions available:
+
+```
+NAME                                      	CHART VERSION	APP VERSION	DESCRIPTION                                       
+prometheus-community/kube-prometheus-stack	87.18.0      	v0.92.1    	kube-prometheus-stack collects Kubernetes manif...
+prometheus-community/kube-prometheus-stack	87.17.0      	v0.92.1    	kube-prometheus-stack collects Kubernetes manif...
+prometheus-community/kube-prometheus-stack	87.16.1      	v0.92.1    	kube-prometheus-stack collects Kubernetes manif...
+prometheus-community/kube-prometheus-stack	87.16.0      	v0.92.1    	kube-prometheus-stack collects Kubernetes manif...
+prometheus-community/kube-prometheus-stack	87.15.2      	v0.92.1    	kube-prometheus-stack collects Kubernetes manif...
+prometheus-community/kube-prometheus-stack	87.15.1      	v0.92.1    	kube-prometheus-stack collects Kubernetes manif...
+prometheus-community/kube-prometheus-stack	87.15.0      	v0.92.1    	kube-prometheus-stack collects Kubernetes manif...
+prometheus-community/kube-prometheus-stack	87.14.0      	v0.92.1    	kube-prometheus-stack collects Kubernetes manif...
+prometheus-community/kube-prometheus-stack	87.13.0      	v0.92.1    	kube-prometheus-stack collects Kubernetes manif...
+```
+
+Using this information, we will deploy `v87.18.0` of the chart, which we will reference in the application manifest for Prometheus:
+
+```
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    targetRevision: 87.18.0          # <-- pin the exact version from helm search
+    helm:
+      values: |
+        # kind single-node: disable control-plane scrape targets that aren't reachable
+        kubeControllerManager:
+          enabled: false
+        kubeScheduler:
+          enabled: false
+        kubeEtcd:
+          enabled: false
+        kubeProxy:
+          enabled: false
+        # Let Prometheus discover ServiceMonitors in ALL namespaces, not just its own
+        prometheus:
+          prometheusSpec:
+            serviceMonitorSelectorNilUsesHelmValues: false
+            ruleSelectorNilUsesHelmValues: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true        # REQUIRED — CRD annotation size limit
+      - CreateNamespace=true        # makes the monitoring namespace for you
+```
+
+Create this file in the `apps/` directory of our Git repo and head over to the Argo CD UI to confirm that prometheus is running under root.
 
 ## Design Decisions & Trade-offs
 - Using kind to create the Kubernetes cluster
@@ -162,7 +239,8 @@ Once this is created, use `kubectl apply -f /apps/<file-name>.yaml` to initializ
 - Using kubectl port-forward, we're able to easily access the Argo CD UI
     - This is a quick way to gain access but is only an option as long as the port-forward tunnel is open. In production environments, exposing Argo CD via something like an Ingress with proper DNS and TLS configured would be best practice.
 - Using an app-of-app pattern and creating each manifest in the `/apps` directory in our repository.
-    - app-of-apps is the foundational pattern (explicit, one-file-per-app); ApplicationSet is the scale-up (templated, generator-driven) that the [docs](https://argo-cd.readthedocs.io/en/stable/operator-manual/cluster-bootstrapping/#cluster-bootstrapping) now recommend for bootstrapping.
+    - app-of-apps is the foundational pattern (explicit, one-file-per-app); ApplicationSet is the scale-up (templated, generator-driven) that the [docs](https://argo-cd.readthedocs.io/en/stable/operator-manual/cluster-bootstrapping/#application-sets-and-cluster-labels-recommended) now recommend for bootstrapping.
 
 ## Assumptions
 
+- One heavy assumption that I had was the ability to use something like Claude to verify, troubleshoot, and parse information as needed.
