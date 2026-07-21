@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/<you>/Part-1---ArgoCD-Technical-Implementation
+    repoURL: https://github.com/Tchaikvsky/Part-1---ArgoCD-Technical-Implementation
     path: argocd/install          # <-- points at the dir where kustomization.yaml lives
     targetRevision: main          # <-- Use default branch, not "stable"
   destination:
@@ -14,7 +14,7 @@ spec:
     namespace: argocd
   syncPolicy:
     automated:
-      prune: false              
+      prune: true             
       selfHeal: true
     syncOptions:
       - ServerSideApply=true

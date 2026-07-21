@@ -79,6 +79,35 @@ kubectl port-forward svc/argocd-server -n argocd 8080:443
 
 If you've done everything correctly. You should be logged in into the Argo CD UI and see the applications page.
 
+### Manage Argo CD with Argo CD
+
+We want Argo CD to be "self-managed" so we need to make our Argo CD instance an Application:
+
+```
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Tchaikvsky/Part-1---ArgoCD-Technical-Implementation/
+    path: argocd/install          # <-- points at the dir where kustomization.yaml lives
+    targetRevision: main          # <-- Use our repo branch verson of Argo, not "stable"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true            
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
+
+#Template from https://argo-cd.readthedocs.io/en/stable/operator-manual/declarative-setup/#server-side-apply-requirement
+```
+
 ## Design Decisions & Trade-offs
 - Using kind to create the Kubernetes cluster
     - kind gives a reproducible local cluster ideal for evaluation and simple testing; a production deployment would likely target a managed cluster (EKS/GKE/AKS) or OpenShift for HA, real networking, and multi-node scale.
