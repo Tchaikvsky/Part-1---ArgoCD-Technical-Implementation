@@ -1,6 +1,23 @@
 # Part-1---ArgoCD-Technical-Implementation
 This repository is used to store all configuration files, manifests, and documentation needed to run and review the solution I created.
 
+
+## Table of Contents
+
+- [Argo CD Architecture & GitOps Flow](#argo-cd-architecture--gitops-flow)
+- [Prerequisites](#prerequisites)
+- [How to Deploy](#how-to-deploy)
+  - [Create a Kubernetes cluster](#create-a-kubernetes-cluster)
+  - [Deploy Argo CD & Reach the UI](#deploy-argo-cd--reach-the-ui)
+  - [Manage Argo CD with Argo CD](#manage-argo-cd-with-argo-cd)
+  - [Bootstrap the root app-of-apps application](#bootstrap-the-root-app-of-apps-application)
+  - [Deploy Prometheus, metrics, dashboards, and alerts](#deploy-prometheus-metrics-dashboards-and-alerts)
+  - [SSO Setup with Okta & OIDC](#sso-setup-with-okta--oidc)
+  - [Manage multiple environments with an ApplicationSet](#manage-multiple-environments-with-an-applicationset)
+- [Design Decisions & Trade-offs](#design-decisions--trade-offs)
+- [Assumptions](#assumptions)
+
+
 ## Argo CD Architecture & GitOps Flow
 
 ![Argo CD Architecture](assets/auto-sync-architecture.png)
