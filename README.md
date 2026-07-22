@@ -37,6 +37,7 @@ When a change is committed to Git, the following sequence brings the cluster to 
 
 If resources are modified directly in the cluster, the same reconciliation process detects the configuration drift. With `selfHeal` enabled, the application-controller automatically restores the cluster so that it matches the desired state stored in Git.
 
+[Component responsibilities per Argo CD's Component Architecture documentation](argo-cd.readthedocs.io/en/stable/developer-guide/architecture/components/)
 
 ## Prerequisites
 
@@ -544,9 +545,9 @@ We will be using Okta as our IdP for this project using a free Okta Developer ac
 
 Most of the first link revolves around configuring things on the Okta side as well as the Argo CD UI. After that, we'll create a Kubernetes secret to hold the SSO `clientSecret` which we will then pass into the Okta configmap we create.
 
-#### Storing the client secret out-of-band
+#### Storing the client secret internally in the cluster
 
-The OIDC client secret is sensitive and must **not** be committed to Git. Rather than place it in a manifest, we inject it directly into the existing `argocd-secret` and reference it from config. Using `stringData` lets us pass the raw secret — Kubernetes base64-encodes it for us — and `--type merge` adds our key without disturbing the other keys already in `argocd-secret` (the server signing key, admin password hash, and TLS material):
+The OIDC client secret is sensitive and must **not** be committed to Git. Rather than place it in a manifest, we inject it directly into the existing `argocd-secret` and reference it from config. Using `stringData` lets us pass the raw secret. Kubernetes base64-encodes it for us — and `--type merge` adds our key without disturbing the other keys already in `argocd-secret` (the server signing key, admin password hash, and TLS material):
 
 ```
 kubectl -n argocd patch secret argocd-secret \
