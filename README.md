@@ -1,7 +1,25 @@
 # Part-1---ArgoCD-Technical-Implementation
 This repository is used to store all configuration files, manifests, and documentation needed to run and review the solution I created.
 
-## Architecture Overview
+## Argo CD Architecture & GitOps Flow
+
+![Argo CD Architecture](assets/auto-sync-architecture.png)
+
+When a change is committed to Git, the following sequence brings the cluster to the desired state:
+
+1. User merges a pull request into the Git repository.
+2. The Git Server stores the updated manifests.
+3. The argocd-server polls the Git repository and detects the new commit.
+4. The argocd-server notifies the application-controller of the manifest changes.
+5. The application-controller requests the desired manifests from the repo-server.
+6. The repo-server retrieves, renders, and caches the manifests before returning them to the application-controller.
+7. The application-controller retrieves the current cluster state from the Kubernetes API Server.
+8. The application-controller compares the desired state from Git with the live state in the cluster.
+9. If auto-sync is enabled and the application is OutOfSync, the application-controller applies the rendered manifests through the Kubernetes API Server.
+10. The Kubernetes API Server updates the running Kubernetes resources until they match the desired state.
+
+If resources are modified directly in the cluster, the same reconciliation process detects the configuration drift. With `selfHeal` enabled, the application-controller automatically restores the cluster so that it matches the desired state stored in Git.
+
 
 ## Prerequisites
 
@@ -80,7 +98,7 @@ kubectl port-forward svc/argocd-server -n argocd 8080:443
 
 6. If you're hosting on a local machine, the UI should now be accessible via `https://localhost:8080`. From here, you can accept the self-signed certificate warning and sign in using the username `admin` and the password we retrieved from the last step.
 
-If you've done everything correctly. You should be logged in into the Argo CD UI and see the applications page.
+If you've done everything correctly. You should be logged into the Argo CD UI and see the applications page.
 
 
 ### Manage Argo CD with Argo CD
@@ -98,7 +116,7 @@ spec:
   source:
     repoURL: <your-repoURL>
     path: argocd/install          # <-- points at the dir where kustomization.yaml lives
-    targetRevision: main          # <-- our repo's branch, not the upstream stable tag"
+    targetRevision: main          # <-- our repo's branch, not the upstream stable tag
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd
@@ -111,9 +129,9 @@ spec:
 
 #Template from https://argo-cd.readthedocs.io/en/stable/operator-manual/declarative-setup/#server-side-apply-requirement
 ```
-Save this to your git repository and then apply the manifest inside your cluster with something like `kubectl apply -f <file-name-here>`. We need to use `kubectl apply` at first because ArgoCD can't manage an Application it doesn't know exists yet. Once the Argo CD appears as an application in the UI and you verify a simple test-sync works, feel free to go into your repo and change `prune:` to `true` for self-management.
+Save this to your git repository and then apply the manifest inside your cluster with something like `kubectl apply -f <file-name-here>`. We need to use `kubectl apply` at first because Argo CD can't manage an Application it doesn't know exists yet. Once the Argo CD appears as an application in the UI and you verify a simple test-sync works, feel free to go into your repo and change `prune:` to `true` for self-management.
 
->If you'd like to do a quick test to make sure that ArgoCD reacts to changes in your Git repository, you can add a simple label section to your kustomize.yaml file. Commit the change and push it to your git repository. Re-sync the application and see if the change is propagated:
+>If you'd like to do a quick test to make sure that Argo CD reacts to changes in your Git repository, you can add a simple label section to your kustomize.yaml file. Commit the change and push it to your git repository. Re-sync the application and see if the change is propagated:
 ```
 labels:
   - pairs:
@@ -235,7 +253,7 @@ Create this file in the `apps/` directory of our Git repo and head over to the A
 
 2. Deploy ServiceMonitors for the argocd namespace resources
 
-Next, we will want to deploy ServiceMonitors for the resources in the ArgoCD namespace so metrics can be collected for them. We will create the manifest for these ServiceMonitors under the `argocd/install` directory:
+Next, we will want to deploy ServiceMonitors for the resources in the Argo CD namespace so metrics can be collected for them. We will create the manifest for these ServiceMonitors under the `argocd/install` directory:
 
 ```
 apiVersion: monitoring.coreos.com/v1
@@ -584,31 +602,134 @@ Once this looks correct, commit and push. The self-managed `argocd` Application 
 
 #### Pitfalls to watch for
 
-A few issues we ran into that are worth flagging:
+A few issues I ran into that are worth flagging:
 
 - **Redirect URI mismatch.** Okta pre-fills a default sign-in redirect URI of `/authorization-code/callback`, but when I configured Argo CD I used `/auth/callback`. These must match exactly or Okta returns a `400 invalid_request`. Set the Okta app's Sign-in redirect URI to `https://localhost:8080/auth/callback` or add the correct original URI via Okta Admin Console.
 - **User not assigned to the application.** If you skip group/user assignment when creating the Okta app, login fails with `access_denied` ("User is not assigned to the client application"). Assign your user (or the built-in `Everyone` group) under the app's **Assignments** tab.
-- **Namespace in the patch metadata.** The upstream `argocd-cm` has no `namespace:` field, and kustomize matches patches on namespace among other fields. Including `namespace: argocd` in the patch metadata causes a "no matches for patch" error. We omit it and let the top-level `namespace:` in the kustomization apply it at build time.
+- **Namespace in the patch metadata.** The upstream `argocd-cm` has no `namespace:` field, and kustomize matches patches on namespace among other fields. Including `namespace: argocd` in the patch metadata causes a "no matches for patch" error. Omit it and let the top-level `namespace:` in the kustomization apply it at build time.
 - **Every `argocd.example.com` in the docs → `https://localhost:8080`.** Since we access Argo CD via `kubectl port-forward`, the redirect URI, sign-out URI, `url:` field, and the authorization server's Audience all need to use the localhost address, not the doc's placeholder domain.
 
-### ApplicationSet Environments (Dev,Test,Prod)
+### Manage multiple environments with an ApplicationSet
 
+The final piece is deploying a single application across multiple environments without hand-writing an Application manifest for each one. For this we use an **ApplicationSet**. Instead of one file per environment, we define one template plus a *generator* that stamps out an Application per environment automatically.
+
+We'll deploy the Argo CD `guestbook` example across `dev`, `staging`, and `prod` which is used throughout Argo CD's documentation and examples. Each environment will differ by replica count to demonstrate per-environment configuration.
+
+First, create an `environments/` directory with one subdirectory per environment. Each holds a Kustomization that pulls the upstream guestbook base and overrides the replica count.
+
+```
+# environments/dev/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - https://github.com/argoproj/argocd-example-apps//kustomize-guestbook
+replicas:
+  - name: guestbook-ui
+    count: 1
+```
+
+Repeat for `staging` (`count: 2`) and `prod` (`count: 3`), giving the repo:
+
+```
+environments/
+├── dev/     (1 replica)
+├── staging/ (2 replicas)
+└── prod/    (3 replicas)
+```
+
+Next, create the ApplicationSet in the `apps/` directory so that our root app-of-apps manages it:
+
+```
+# apps/guestbook-appset.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: guestbook
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: <your-repoURL>
+        revision: main
+        directories:
+          - path: environments/*        # discovers one directory per environment
+  template:
+    metadata:
+      name: 'guestbook-{{.path.basename}}'     # -> guestbook-dev, guestbook-staging, guestbook-prod
+    spec:
+      project: default
+      source:
+        repoURL: <your-repoURL>
+        targetRevision: main
+        path: '{{.path.path}}'                 # -> environments/dev, etc.
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: 'guestbook-{{.path.basename}}'
+      syncPolicy:
+        automated:
+          prune: false
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true               # each environment gets its own namespace
+```
+
+The **Git directory generator** scans `environments/*`, and for each matching directory produces a set of template variables: `{{.path.basename}}` (the directory name, e.g. `dev`) and `{{.path.path}}` (the full path, e.g. `environments/dev`). The template uses these to generate one Application per environment — named `guestbook-<env>`, sourcing from that environment's folder, deploying into its own `guestbook-<env>` namespace. `goTemplateOptions: ["missingkey=error"]` makes template errors fail loudly rather than silently producing a broken Application.
+
+Commit `environments/` and `apps/guestbook-appset.yaml`, then push. Root detects the new ApplicationSet and syncs it; the ApplicationSet controller then generates the three Applications automatically:
+
+```
+kubectl -n argocd get applicationset guestbook
+kubectl get applications -A | grep guestbook
+
+---
+argocd   guestbook-dev       Synced   Healthy
+argocd   guestbook-prod      Synced   Healthy
+argocd   guestbook-staging   Synced   Healthy
+```
+
+The per-environment replica differences confirm that the same application is deployed with different configuration in each environment:
+
+```
+kubectl get deploy -n guestbook-dev        # 1 replica
+kubectl get deploy -n guestbook-staging    # 2 replicas
+kubectl get deploy -n guestbook-prod       # 3 replicas
+```
+
+The payoff of this pattern is that we can quickly add a fourth environment if requested. We would simply create `environments/qa/kustomization.yaml` and push to our Git Repository. From there, the ApplicationSet discovers the new directory and generates `guestbook-qa` automatically, with no new Application manifest required.
 
 
 ## Design Decisions & Trade-offs
 - Using kind to create the Kubernetes cluster
     - kind gives a reproducible local cluster ideal for evaluation and simple testing; a production deployment would likely target a managed cluster (EKS/GKE/AKS) or OpenShift for HA, real networking, and multi-node scale.
 - Pinned Argo CD to a specific version (v3.4.5) rather than tracking `stable`
-    - `stable` is a floating tag that moves as new releases land, which makes the desired state non-deterministic. Argo CD could reconcile itself toward a version we never chose or tested. Pinning a specific version  in Git as the source of truth makes the install reproducible and upgrades an auditable, reviewable commit. The trade-off is that we don't automatically get new releases, which mirrors real organizational practice.
-- Using kubectl port-forward, we're able to easily access the Argo CD UI
+    - `stable` is a floating tag that moves as new releases land, which makes the desired state non-deterministic. Argo CD could reconcile itself toward a version I never chose or tested. Pinning a specific version in Git as the source of truth makes the install reproducible and upgrades an auditable, reviewable commit. The trade-off is that I don't automatically get new releases, which mirrors real organizational practice.
+- Using kubectl port-forward, I'm able to easily access the Argo CD UI
     - This is a quick way to gain access but is only an option as long as the port-forward tunnel is open. In production environments, exposing Argo CD via something like an Ingress with proper DNS and TLS configured would be best practice.
-- Using an app-of-app pattern and creating each manifest in the `/apps` directory in our repository.
+- `prune` value set to `false` during bootstrapping of Argo CD instead of set to `true` like most documentation
+    - Out of an abundance of caution, `prune` was set to `false` initially. For self-referential apps (Argo CD managing itself, the root app-of-apps), a misconfigured sync with pruning enabled could delete the very components doing the syncing, with nothing left to recover.
+- Using an app-of-apps pattern and creating each manifest in the `/apps` directory in the repository.
     - app-of-apps is the foundational pattern (explicit, one-file-per-app); ApplicationSet is the scale-up (templated, generator-driven) that the [docs](https://argo-cd.readthedocs.io/en/stable/operator-manual/cluster-bootstrapping/#application-sets-and-cluster-labels-recommended) now recommend for bootstrapping.
-- We kept alerts for Dex despite it being down to prove that the alerts were actualy working.
+    - The trade-off is that each app is an explicit file to maintain; at larger scale an ApplicationSet's templating would reduce that boilerplate
+- I kept alerts for Dex despite it being down to prove that the alerts were actually working.
     - In a real environment, this would cause alert fatigue and would most likely be resolved by excluding dex from the Prometheus rules.
-- Patch metadata must match the base exactly, and the namespace: at the top of the kustomization applies the namespace at build time, so you don't put it on individual patches.
-    - When creating the patches in the kustomize.yaml file, we specified namespaces but this created an error when testing.
+- Handled the OIDC client secret internally in the cluster rather than committing it.
+    - The secret is injected into `argocd-secret` via `kubectl` and referenced from config with `$oidc.okta.clientSecret`, so it never enters Git. This method was used instead of creating an external secret-store/vault, which is probably more of a production-level method.
+- Applied SSO config via Kustomize patches that merge into the upstream ConfigMaps.
+    - `argocd-cm` and `argocd-rbac-cm` already exist in the upstream install, so rather than replace them, I patch them, merging the OIDC/RBAC keys in.
+    - When creating the patches in the kustomize.yaml file, I specified namespaces but this created an error when testing.
+- I used the `path` generator for the ApplicationSet, not multiple clusters for simplicity and lack of resources on my side to host multiple clusters. 
+
 
 ## Assumptions
 
-- One assumption that I had was the ability to use something like Claude to verify, troubleshoot, and parse information as needed.s
+Where the assignment left room for interpretation, I made the following assumptions:
+
+- **"Multiple environments or clusters" was interpreted as multiple environments.** On a single local cluster, deploying one application across `dev`, `staging`, and `prod` (via Kustomize overlays generated by an ApplicationSet) demonstrates the pattern without the overhead of provisioning and registering additional clusters. The same ApplicationSet approach extends to multiple clusters with a cluster generator if needed.
+- **A local `kind` cluster is acceptable for evaluation.** A production deployment would target a managed cluster (EKS/GKE/AKS) for HA, real networking, and multi-node scale, but `kind` provides a reproducible, self-contained environment for review.
+- **A free-tier IdP is acceptable for SSO.** I used a free Okta Integrator (developer) account rather than a production identity provider, which is sufficient to demonstrate a working OIDC integration.
+- **Ephemeral storage is acceptable.** No persistence requirement was specified, so Prometheus and Grafana use default (non-persistent) storage; metrics and dashboards reset if their pods restart. Production would use persistent volumes.
+- **`kubectl port-forward` is an acceptable way to access the Argo CD and Grafana UIs.** No Ingress/DNS/TLS requirement was stated. A production setup would expose these via an Ingress with proper DNS and TLS.
+- **Single-user, email-based RBAC is sufficient.** As a solo evaluation, the SSO identity is mapped directly to `role:admin` by email rather than through group-based RBAC.
+- **The reviewer has the listed prerequisites installed** (Docker, kubectl, kind, Helm at the noted versions) and access to clone the repository.
